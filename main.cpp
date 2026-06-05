@@ -12,6 +12,16 @@ import vulkan_hpp;
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
 
+const std::vector<char const*> validationLayers = {
+  "VK_LAYER_KHRONOS_validation",
+};
+
+#ifdef NDEBUG
+constexpr bool enableValidationLayers = true;
+#else
+constexpr bool enableValidationLayers = false;
+#endif
+
 class HelloTriangleApplication {
 public:
   void run() {
@@ -52,31 +62,60 @@ private:
                                           .pEngineName = "No Engine",
                                           .engineVersion = VK_MAKE_VERSION(1, 0, 0),
                                           .apiVersion = vk::ApiVersion14};
-
-    // Get the required instance extensions from GLFW.
-    uint32_t glfwExtensionCount = 0;
-    auto glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-    // Check if the required GLFW extensions are supported by the Vulkan implementation.
+    // EXTENSIONS CHECK
+    // Get the required extensions.
+    auto requiredExtensions = getRequiredInstanceExtensions();
+    // Check if the required extensions are supported by the Vulkan implementation.
     auto extensionProperties = context.enumerateInstanceExtensionProperties();
-    for (uint32_t i = 0; i < glfwExtensionCount; ++i)
+    auto unsupportedPropertyIt =
+        std::ranges::find_if(requiredExtensions,
+                             [&extensionProperties](auto const &requiredExtension) {
+                               return std::ranges::none_of(extensionProperties,
+                                                           [requiredExtension](auto const &extensionProperty) { return strcmp(extensionProperty.extensionName, requiredExtension) == 0; });
+                             });
+    if (unsupportedPropertyIt != requiredExtensions.end())
     {
-      if (std::ranges::none_of(extensionProperties,
-                               [glfwExtension = glfwExtensions[i]](auto const& extensionProperty)
-                               { return strcmp(extensionProperty.extensionName, glfwExtension) == 0; }))
-      {
-        throw std::runtime_error("Required GLFW extension not supported: " + std::string(glfwExtensions[i]));
-      }
+      throw std::runtime_error("Required extension not supported: " + std::string(*unsupportedPropertyIt));
+    }
+
+    // VALIDATION LAYERS CHECK
+    // Get the required layers
+    std::vector<char const*> requiredLayers;
+    if (enableValidationLayers)
+    {
+      requiredLayers.assign(validationLayers.begin(), validationLayers.end());
+    }
+
+    // Check if the required layers are supported by the Vulkan implementation.
+    auto layerProperties = context.enumerateInstanceLayerProperties();
+    auto unsupportedLayerIt = std::ranges::find_if(requiredLayers,
+                                                   [&layerProperties](auto const &requiredLayer) {
+                                                     return std::ranges::none_of(layerProperties,
+                                                                                 [requiredLayer](auto const &layerProperty) { return strcmp(layerProperty.layerName, requiredLayer) == 0; });
+                                                   });
+    if (unsupportedLayerIt != requiredLayers.end())
+    {
+      throw std::runtime_error("Required layer not supported: " + std::string(*unsupportedLayerIt));
     }
 
     vk::InstanceCreateInfo createInfo{
       .pApplicationInfo = &appInfo,
-      .enabledExtensionCount = glfwExtensionCount,
-      .ppEnabledExtensionNames = glfwExtensions};
+      .enabledLayerCount = static_cast<uint32_t>(requiredLayers.size()),
+      .ppEnabledLayerNames = requiredLayers.data(),
+      .enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size()),
+      .ppEnabledExtensionNames = requiredExtensions.data(),};
 
     instance = vk::raii::Instance(context, createInfo);
+  }
 
+  std::vector<const char*> getRequiredInstanceExtensions()
+  {
+    uint32_t glfwExtensionCount = 0;
+    auto glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
 
+    std::vector extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
+
+    return extensions;
   }
 };
 
