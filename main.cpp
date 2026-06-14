@@ -52,6 +52,8 @@ private:
   std::vector<vk::Image> swapChainImages;
   std::vector<vk::raii::ImageView> swapChainImageViews;
   vk::raii::PipelineLayout pipelineLayout = nullptr;
+  vk::raii::Pipeline graphicsPipeline = nullptr;
+
 
   vk::Extent2D swapChainExtent;
   vk::SurfaceFormatKHR swapChainSurfaceFormat;
@@ -330,6 +332,7 @@ private:
 		vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "fragMain"};
 		vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
 
+
 		vk::PipelineVertexInputStateCreateInfo   vertexInputInfo;
 		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList};
 		vk::PipelineViewportStateCreateInfo      viewportState{.viewportCount = 1, .scissorCount = 1};
@@ -356,6 +359,22 @@ private:
 
 		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 0, .pushConstantRangeCount = 0};
 		pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
+
+		vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipelineCreateInfoChain = {
+		    {.stageCount          = 2,
+		     .pStages             = shaderStages,
+		     .pVertexInputState   = &vertexInputInfo,
+		     .pInputAssemblyState = &inputAssembly,
+		     .pViewportState      = &viewportState,
+		     .pRasterizationState = &rasterizer,
+		     .pMultisampleState   = &multisampling,
+		     .pColorBlendState    = &colorBlending,
+		     .pDynamicState       = &dynamicState,
+		     .layout              = pipelineLayout,
+		     .renderPass          = nullptr},
+		    {.colorAttachmentCount = 1, .pColorAttachmentFormats = &swapChainSurfaceFormat.format}};
+
+		graphicsPipeline = vk::raii::Pipeline(device, nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
 	}
 
   [[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char>&code) const {
@@ -366,21 +385,19 @@ private:
     return shaderModule;
   }
 
-  static std::vector<char> readFile(const std::string &filename) {
-    std::ifstream file(filename, std::ios::ate | std::ios::binary );
-
-    if (!file.is_open()) {
-      throw std::runtime_error("failed to open file");
-    }
-
-    std::vector<char> buffer(file.tellg());
-    file.seekg(0, std::ios::beg);
-    file.read(buffer.data(), static_cast<std::streamsize>(file.tellg()));
-    file.close();
-
-    return buffer;
-  }
-
+	static std::vector<char> readFile(const std::string &filename)
+	{
+		std::ifstream file(filename, std::ios::ate | std::ios::binary);
+		if (!file.is_open())
+		{
+			throw std::runtime_error("failed to open file!");
+		}
+		std::vector<char> buffer(file.tellg());
+		file.seekg(0, std::ios::beg);
+		file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+		file.close();
+		return buffer;
+	}
 
 };
 
