@@ -59,6 +59,8 @@ private:
 	vk::raii::CommandPool commandPool = nullptr;
 	std::vector<vk::raii::CommandBuffer> commandBuffers;
 	uint32_t frameIndex = 0;
+	bool framebufferResized = false;
+
 
 
 	std::vector<vk::raii::Semaphore> presentCompleteSemaphores;
@@ -76,9 +78,18 @@ private:
     glfwInit();
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    // glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
     window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+  	glfwSetWindowUserPointer(window, this);
+  	glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+	}
+
+	static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
+  {
+  	auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+		app->framebufferResized = true;
+
   }
 
   void initVulkan() {
@@ -105,6 +116,8 @@ private:
   }
 
   void cleanup() {
+		cleanupSwapChain();
+
     glfwDestroyWindow(window);
     glfwTerminate();
   }
@@ -506,8 +519,7 @@ private:
 		commandBuffers[frameIndex].pipelineBarrier2(dependency_info);
 	}
 
-	void createSyncObjects()
-	{
+	void createSyncObjects() {
 		assert(presentCompleteSemaphores.empty() && renderFinishedSemaphores.empty() && inFlightFences.empty());
 
 		for (size_t i = 0; i < swapChainImages.size(); i++)
@@ -522,16 +534,14 @@ private:
 		}
 	}
 
-	void drawFrame()
-	{
-		// Note: inFlightFences, presentCompleteSemaphores, and commandBuffers are indexed by frameIndex,
-		//       while renderFinishedSemaphores is indexed by imageIndex
+	void drawFrame() {
 		auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);
 		if (fenceResult != vk::Result::eSuccess)
 		{
 			throw std::runtime_error("failed to wait for fence!");
 		}
 		device.resetFences(*inFlightFences[frameIndex]);
+
 
 		auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);
 
@@ -554,18 +564,40 @@ private:
 		                                        .pSwapchains        = &*swapChain,
 		                                        .pImageIndices      = &imageIndex};
 		result = graphicsQueue.presentKHR(presentInfoKHR);
-		switch (result)
-		{
-			case vk::Result::eSuccess:
-				break;
-			case vk::Result::eSuboptimalKHR:
-				std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n";
-				break;
-			default:
-				break;        // an unexpected result is returned!
-		}
+  	if ((result == vk::Result::eSuboptimalKHR) || (result == vk::Result::eErrorOutOfDateKHR) || framebufferResized)
+  	{
+			framebufferResized = true;
+  		recreateSwapChain();
+  	}
+  	else
+  	{
+  		// There are no other success codes than eSuccess; on any error code, presentKHR already threw an exception.
+  		assert(result == vk::Result::eSuccess);
+  	}
 		frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
+
+	void cleanupSwapChain() {
+  	swapChainImageViews.clear();
+  	swapChain = nullptr;
+	}
+
+	void recreateSwapChain() {
+  	int width = 0, height = 0;
+  	glfwGetFramebufferSize(window, &width, &height);
+
+  	while (width == 0 || height == 0) {
+  		glfwGetFramebufferSize(window, &width, &height);
+  		glfwWaitEvents();
+  	}
+
+  	device.waitIdle();
+
+		cleanupSwapChain();
+
+  	createSwapChain();
+  	createImageViews();
+  }
 
 
 };
