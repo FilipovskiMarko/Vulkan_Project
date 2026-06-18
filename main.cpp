@@ -19,6 +19,8 @@ import vulkan_hpp;
 #include <limits>
 #include <algorithm>
 #include <fstream>
+#include <glm/glm.hpp>
+
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
@@ -34,6 +36,28 @@ constexpr bool enableValidationLayers = true;
 #else
 constexpr bool enableValidationLayers = false;
 #endif
+
+struct Vertex
+{
+	glm::vec2 pos;
+	glm::vec3 color;
+
+	static vk::VertexInputBindingDescription getBindingDescription() {
+		return {.binding = 0, .stride = sizeof(Vertex), .inputRate = vk::VertexInputRate::eVertex};
+	}
+
+	static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions() {
+		return {{{.location = 0, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(Vertex, pos)},
+						 {.location = 1, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(Vertex, color)}}};
+	}
+};
+
+//
+const std::vector<Vertex> vertices = {
+	{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+	{{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+	{{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+};
 
 class HelloTriangleApplication {
 public:
@@ -58,6 +82,9 @@ private:
   vk::raii::Pipeline graphicsPipeline = nullptr;
 	vk::raii::CommandPool commandPool = nullptr;
 	std::vector<vk::raii::CommandBuffer> commandBuffers;
+	vk::raii::Buffer vertexBuffer = nullptr;
+	vk::raii::DeviceMemory vertexBufferMemory = nullptr;
+
 	uint32_t frameIndex = 0;
 	bool framebufferResized = false;
 
@@ -102,6 +129,7 @@ private:
     createImageViews();
     createGraphicsPipeline();
   	createCommandPool();
+  	createVertexBuffer();
   	createCommandBuffers();
   	createSyncObjects();
   }
@@ -358,14 +386,20 @@ private:
 
 	void createGraphicsPipeline()
 	{
-		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
+		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("/home/filip/Programs/CLion_Projects/KG_Vulkan/shaders/slang.spv"));
 
 		vk::PipelineShaderStageCreateInfo vertShaderStageInfo{.stage = vk::ShaderStageFlagBits::eVertex, .module = shaderModule, .pName = "vertMain"};
 		vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "fragMain"};
 		vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
 
 
-		vk::PipelineVertexInputStateCreateInfo   vertexInputInfo;
+  	auto                                     bindingDescription    = Vertex::getBindingDescription();
+  	auto                                     attributeDescriptions = Vertex::getAttributeDescriptions();
+  	vk::PipelineVertexInputStateCreateInfo   vertexInputInfo{.vertexBindingDescriptionCount   = 1,
+																														 .pVertexBindingDescriptions      = &bindingDescription,
+																														 .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size()),
+																														 .pVertexAttributeDescriptions    = attributeDescriptions.data()};
+
 		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList};
 		vk::PipelineViewportStateCreateInfo      viewportState{.viewportCount = 1, .scissorCount = 1};
 
@@ -421,6 +455,7 @@ private:
 		std::ifstream file(filename, std::ios::ate | std::ios::binary);
 		if (!file.is_open())
 		{
+			std::cout << filename << std::endl;
 			throw std::runtime_error("failed to open file!");
 		}
 		std::vector<char> buffer(file.tellg());
@@ -469,9 +504,10 @@ private:
 		    .pColorAttachments    = &attachmentInfo};
 		commandBuffer.beginRendering(renderingInfo);
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
+  	commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});
 		commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));
 		commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
-		commandBuffer.draw(3, 1, 0, 0);
+		commandBuffer.draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 		commandBuffer.endRendering();
 
 		// After rendering, transition the swapchain image to vk::ImageLayout::ePresentSrcKHR
@@ -598,6 +634,63 @@ private:
   	createSwapChain();
   	createImageViews();
   }
+
+	void createVertexBuffer()
+  {
+  	vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+
+  	auto [stagingBuffer, stagingBufferMemory] =
+				createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+  	void *dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
+  	memcpy(dataStaging, vertices.data(), bufferSize);
+  	stagingBufferMemory.unmapMemory();
+
+  	std::tie(vertexBuffer, vertexBufferMemory) =
+				createBuffer(bufferSize, vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+  	copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+  }
+
+	void copyBuffer(vk::raii::Buffer & srcBuffer, vk::raii::Buffer & dstBuffer, vk::DeviceSize size)
+  {
+  	vk::CommandBufferAllocateInfo allocInfo{ .commandPool = commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1 };
+  	vk::raii::CommandBuffer commandCopyBuffer = std::move(device.allocateCommandBuffers(allocInfo).front());
+
+  	commandCopyBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+  	commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));
+  	commandCopyBuffer.end();
+
+  	graphicsQueue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandCopyBuffer}, nullptr);
+  	graphicsQueue.waitIdle();
+
+
+  }
+
+	std::pair<vk::raii::Buffer, vk::raii::DeviceMemory> createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties)
+  {
+  	vk::BufferCreateInfo   bufferInfo{.size = size, .usage = usage, .sharingMode = vk::SharingMode::eExclusive};
+  	vk::raii::Buffer       buffer          = vk::raii::Buffer(device, bufferInfo);
+  	vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
+  	vk::MemoryAllocateInfo allocInfo{.allocationSize = memRequirements.size, .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
+  	vk::raii::DeviceMemory bufferMemory = vk::raii::DeviceMemory(device, allocInfo);
+  	buffer.bindMemory(*bufferMemory, 0);
+  	return {std::move(buffer), std::move(bufferMemory)};
+  }
+
+	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
+  	vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
+
+  	for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)
+  	{
+  		if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)
+  		{
+  			return i;
+  		}
+  	}
+
+  }
+
 
 
 };
