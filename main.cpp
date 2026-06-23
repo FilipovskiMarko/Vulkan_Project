@@ -1,6 +1,7 @@
 // #define VK_USE_PLATFORM_WIN32_KHR
 // #define GLFW_EXPOSE_NATIVE_WIN32
 #define GLFW_INCLUDE_VULKAN
+#include <unordered_map>
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
 
@@ -19,19 +20,27 @@ import vulkan_hpp;
 #include <limits>
 #include <algorithm>
 #include <fstream>
+#include <unordered_map>
 
 #define GLM_FORCE_DEFAULT_ALIGNED_GENTYPES
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/hash.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
 
 #include <chrono>
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
+const std::string  MODEL_PATH   = "/home/filip/Programs/CLion_Projects/KG_Vulkan/models/viking_room.obj";
+const std::string  TEXTURE_PATH = "/home/filip/Programs/CLion_Projects/KG_Vulkan/textures/viking_room.png";
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 
@@ -62,30 +71,29 @@ struct Vertex
 						 {.location = 1, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(Vertex, color)},
 						 {.location = 2, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(Vertex, texCoord)}}};
 	}
+
+	bool operator==(const Vertex& other) const {
+		return pos == other.pos && color == other.color && texCoord == other.texCoord;
+	}
+
 };
+
+namespace std
+{
+	template<> struct hash<Vertex>
+	{
+		size_t operator()(Vertex const& vertex) const
+		{
+			return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^ (hash<glm::vec2>()(vertex.texCoord) << 1);
+		}
+	};
+}
 
 struct UniformBufferObject
 {
 	glm::mat4 model;
 	glm::mat4 view;
 	glm::mat4 proj;
-};
-
-const std::vector<Vertex> vertices = {
-	{{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-	{{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-	{{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-	{{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
-
-	{{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-	{{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-	{{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-	{{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}
-};
-
-const std::vector<uint16_t> indices = {
-	0, 1, 2, 2, 3, 0,
-	4, 5, 6, 6, 7, 4
 };
 
 class HelloTriangleApplication {
@@ -142,7 +150,8 @@ private:
 	std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
 	std::vector<vk::raii::Fence> inFlightFences;
 
-
+	std::vector<Vertex> vertices;
+	std::vector<uint32_t> indices;
 
   vk::Extent2D swapChainExtent;
   vk::SurfaceFormatKHR swapChainSurfaceFormat;
@@ -182,6 +191,7 @@ private:
   	createTextureImage();
   	createTextureImageView();
   	createTextureSampler();
+  	loadModel();
   	createVertexBuffer();
   	createIndexBuffer();
   	createUniformBuffers();
@@ -582,7 +592,7 @@ private:
 		commandBuffer.beginRendering(renderingInfo);
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
   	commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});
-  	commandBuffer.bindIndexBuffer(*indexBuffer, 0, vk::IndexType::eUint16);
+  	commandBuffer.bindIndexBuffer(*indexBuffer, 0, vk::IndexTypeValue<decltype(indices)::value_type>::value);
 		commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));
 		commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
   	commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, *descriptorSets[frameIndex], nullptr);
@@ -863,7 +873,7 @@ private:
 
 	void createTextureImage() {
   	int            texWidth, texHeight, texChannels;
-  	stbi_uc       *pixels    = stbi_load("/home/filip/Programs/CLion_Projects/KG_Vulkan/textures/CC0.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+  	stbi_uc       *pixels    = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
   	vk::DeviceSize imageSize = texWidth * texHeight * 4;
 
   	if (!pixels)
@@ -1040,9 +1050,45 @@ private:
 															 vk::FormatFeatureFlagBits::eDepthStencilAttachment);
   }
 
+	void loadModel()
+  {
+  	tinyobj::attrib_t                attrib;
+  	std::vector<tinyobj::shape_t>    shapes;
+  	std::vector<tinyobj::material_t> materials;
+  	std::string                      warn, err;
 
+  	if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, MODEL_PATH.c_str()))
+  	{
+  		throw std::runtime_error(warn + err);
+  	}
 
+  	std::unordered_map<Vertex, uint32_t> uniqueVertices{};
 
+  	for (const auto &shape : shapes) {
+  		for (const auto &index : shape.mesh.indices) {
+  			Vertex vertex{};
+
+  			vertex.pos = {
+  				attrib.vertices[3 * index.vertex_index + 0],
+					attrib.vertices[3 * index.vertex_index + 1],
+					attrib.vertices[3 * index.vertex_index + 2]
+				};
+
+  			vertex.texCoord = {
+  				attrib.texcoords[2 * index.texcoord_index + 0],
+					1.0 - attrib.texcoords[2 * index.texcoord_index + 1]
+				};
+
+  			vertex.color = {1.0f, 1.0f, 1.0f};
+
+				auto [it, inserted] = uniqueVertices.insert({vertex, static_cast<uint32_t>(vertices.size())});
+  			if (inserted) {
+  				vertices.push_back(vertex);
+  			}
+  			indices.push_back(it->second);
+  		}
+  	}
+  }
 
 
 };
